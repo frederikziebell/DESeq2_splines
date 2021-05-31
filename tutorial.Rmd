@@ -1,0 +1,124 @@
+
+# Preparations
+```{r}
+suppressPackageStartupMessages({
+  library("recount3")
+  library("DESeq2")
+  library("splines")
+  library("cowplot")
+  library("tidyverse")
+})
+theme_set(theme_cowplot())
+```
+
+# Create data set
+```{r message=FALSE, warning=FALSE}
+# # download data using recount3
+# proj_info <- available_projects() %>% 
+#   filter(project=="SRP144178")
+# se <- create_rse(proj_info)
+se <- readRDS("SRP144178.rds")
+
+# extract donor and timepoint info
+colData(se) <- colData(se) %>% 
+  as_tibble(rownames="rowname") %>% 
+  mutate(donor=str_extract(sra.sample_title,"^[:digit:]+_[:digit:]+")) %>% 
+  mutate(time=str_extract(sra.sample_title,"[:digit:]+hr$") %>% str_replace("hr","") %>% as.double()) %>% 
+  select(rowname, donor, time) %>% 
+  column_to_rownames("rowname") %>% 
+  DataFrame()
+
+# subset to two donors
+se <- se[,se$donor %in% c("1741_006","1741_009")]
+
+# make and filter DESeqDataSet
+dds <- DESeqDataSet(se, design=~donor)
+keep <- rowSums(assay(dds)>=10)>=5
+dds <- dds[keep,]
+```
+
+# Inspect data set
+```{r}
+dds
+colData(dds)
+```
+
+# Spline fitting
+```{r message=FALSE, warning=FALSE}
+# create basis of natural cubic splines with interior knots at 8h and 16h
+spline_basis <- ns(dds$time, knots=c(8,16))
+colnames(spline_basis) <- str_c("fun",colnames(spline_basis))
+colData(dds) <- cbind(colData(dds), spline_basis)
+
+# add basis functions to design
+design(dds) <- ~ donor + donor:fun1 + donor:fun2 + donor:fun3
+
+# differential testing
+dds <- DESeq(dds, reduced=~donor+fun1+fun2+fun3, test="LRT", parallel=T)
+```
+
+# Top genes with differential time couse
+```{r}
+res <- results(dds, tidy=T) %>%
+  select(gene_id=row, baseMean, stat, pvalue, padj) %>% 
+  filter(padj<.01) %>% 
+  arrange(pvalue)
+head(res)
+```
+
+# Plot top hit
+```{r}
+gene_id <- res$gene_id[1]
+gene_name <- rowData(dds)$gene_name[rownames(dds)==gene_id]
+
+# estimated model coefficients
+coefs <- mcols(dds)[gene_id,str_subset(colnames(mcols(dds)),"^Intercept|^donor|^fun")] %>% 
+  as_tibble() %>% 
+  pivot_longer(everything()) %>% 
+  deframe()
+
+# timepoints at form which the spline basis was formed
+timepts <-  seq(attr(spline_basis,"Boundary.knots")[1], attr(spline_basis,"Boundary.knots")[2], length.out=100)
+
+# create splines corresponding to original spline basis
+# but with more points at which the splines are evaluated
+spline_basis_detailed <- ns(
+  x = timepts, 
+  knots = attr(spline_basis,"knots"),
+  intercept = attr(spline_basis,"intercept"),
+  Boundary.knots = attr(spline_basis,"Boundary.knots"))
+
+# timecourse of the gene
+gene_timecourse <- counts(dds, normalized=T)[gene_id,] %>% 
+  enframe(name="sample_id", value="norm_count") %>% 
+  dplyr::mutate(log_norm_count=log2(1+norm_count)) %>% 
+  dplyr::left_join(colData(dds) %>% as_tibble(rownames="sample_id"), by="sample_id") %>% 
+  arrange(donor, time)
+
+# make fitted spline for per donor
+spline_donor1741_006 <- tibble(
+  time = timepts,
+  count = coefs["Intercept"] + drop(spline_basis_detailed %*% coefs[str_c("donor1741_006.fun",1:ncol(spline_basis_detailed))]),
+  donor="1741_006"
+) %>% 
+  dplyr::mutate(log_norm_count=log2(1+2^count))
+
+spline_donor1741_009 <- tibble(
+  time = timepts,
+  count = coefs["Intercept"] + coefs["donor_1741_009_vs_1741_006"] + drop(spline_basis_detailed %*% coefs[str_c("donor1741_009.fun",1:ncol(spline_basis_detailed))]),
+  donor="1741_009"
+) %>% 
+  dplyr::mutate(log_norm_count=log2(1+2^count))
+
+gene_timecourse %>% 
+  ggplot(aes(time, log_norm_count, color=donor)) +
+  geom_point(alpha=.6) + 
+  geom_line(data=spline_donor1741_006) +
+  geom_line(data=spline_donor1741_009) +
+  ggsci::scale_color_jco() +
+  labs(x="time [hr]", y="log2(norm. count)", title=gene_name)
+```
+
+```{r}
+sessionInfo()
+```
