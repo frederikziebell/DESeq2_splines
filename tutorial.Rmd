@@ -1,3 +1,11 @@
+---
+title: "Spline regression with DESeq2"
+author: "Frederik Ziebell"
+output:
+  html_document:
+    df_print: paged
+---
+
 
 # Preparations
 ```{r}
