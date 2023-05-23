@@ -4,6 +4,7 @@ author: "Frederik Ziebell"
 output:
   html_document:
     df_print: paged
+    highlight: tango
 ---
 
 
@@ -68,8 +69,8 @@ dds <- DESeq(dds, reduced=~donor+fun1+fun2+fun3, test="LRT", parallel=T)
 # Top genes with differential time couse
 ```{r}
 res <- results(dds, tidy=T) %>%
-  select(gene_id=row, baseMean, stat, pvalue, padj) %>% 
-  filter(padj<.01) %>% 
+  select(gene_id=row, baseMean, stat, pvalue, padj) %>%
+  filter(padj<.01) %>%
   arrange(pvalue)
 head(res)
 ```
@@ -80,9 +81,9 @@ gene_id <- res$gene_id[1]
 gene_name <- rowData(dds)$gene_name[rownames(dds)==gene_id]
 
 # estimated model coefficients
-coefs <- mcols(dds)[gene_id,str_subset(colnames(mcols(dds)),"^Intercept|^donor|^fun")] %>% 
-  as_tibble() %>% 
-  pivot_longer(everything()) %>% 
+coefs <- mcols(dds)[gene_id,str_subset(colnames(mcols(dds)),"^Intercept|^donor|^fun")] %>%
+  as_tibble() %>%
+  pivot_longer(everything()) %>%
   deframe()
 
 # timepoints at form which the spline basis was formed
@@ -91,16 +92,16 @@ timepts <-  seq(attr(spline_basis,"Boundary.knots")[1], attr(spline_basis,"Bound
 # create splines corresponding to original spline basis
 # but with more points at which the splines are evaluated
 spline_basis_detailed <- ns(
-  x = timepts, 
+  x = timepts,
   knots = attr(spline_basis,"knots"),
   intercept = attr(spline_basis,"intercept"),
   Boundary.knots = attr(spline_basis,"Boundary.knots"))
 
 # timecourse of the gene
-gene_timecourse <- counts(dds, normalized=T)[gene_id,] %>% 
-  enframe(name="sample_id", value="norm_count") %>% 
-  dplyr::mutate(log_norm_count=log2(1+norm_count)) %>% 
-  dplyr::left_join(colData(dds) %>% as_tibble(rownames="sample_id"), by="sample_id") %>% 
+gene_timecourse <- counts(dds, normalized=T)[gene_id,] %>%
+  enframe(name="sample_id", value="norm_count") %>%
+  dplyr::mutate(log_norm_count=log2(1+norm_count)) %>%
+  dplyr::left_join(colData(dds) %>% as_tibble(rownames="sample_id"), by="sample_id") %>%
   arrange(donor, time)
 
 # make fitted spline for per donor
@@ -108,19 +109,19 @@ spline_donor1741_006 <- tibble(
   time = timepts,
   count = coefs["Intercept"] + drop(spline_basis_detailed %*% coefs[str_c("donor1741_006.fun",1:ncol(spline_basis_detailed))]),
   donor="1741_006"
-) %>% 
+) %>%
   dplyr::mutate(log_norm_count=log2(1+2^count))
 
 spline_donor1741_009 <- tibble(
   time = timepts,
   count = coefs["Intercept"] + coefs["donor_1741_009_vs_1741_006"] + drop(spline_basis_detailed %*% coefs[str_c("donor1741_009.fun",1:ncol(spline_basis_detailed))]),
   donor="1741_009"
-) %>% 
+) %>%
   dplyr::mutate(log_norm_count=log2(1+2^count))
 
-gene_timecourse %>% 
+gene_timecourse %>%
   ggplot(aes(time, log_norm_count, color=donor)) +
-  geom_point(alpha=.6) + 
+  geom_point(alpha=.6) +
   geom_line(data=spline_donor1741_006) +
   geom_line(data=spline_donor1741_009) +
   ggsci::scale_color_jco() +
